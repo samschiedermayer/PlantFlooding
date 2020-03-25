@@ -1,5 +1,5 @@
 // 1 for normal, 0 for test
-int const MODE = 0;
+int const MODE = 1;
 
 /**
  * SwitchValvePair has refferals to one float switch and one solenoid valve
@@ -9,7 +9,7 @@ class SwitchValvePair {
     bool enabled = true;
     bool error = false;
     String errorName = "none";
-    int timeMilSinceLastFill = 0;
+    int TimeMinSinceLastFill = 0;
     int inPin;
     int outPin;
     int ID;
@@ -61,19 +61,23 @@ class SwitchValvePair {
       return errorName;
     }
 
-    // Increment amount time since last refill by timeMil
-    void incTimeMilSinceLastFill(int timeMil) {
-      timeMilSinceLastFill += timeMil;
+    int getTimeMinSinceLastFill() {
+      return TimeMinSinceLastFill;
     }
 
-    // Refresh timeMilSinceLastFill back to zero
-    void refTimeMilSinceLastFill() {
-      timeMilSinceLastFill = 0;
+    // Increment amount time since last refill by timeMil
+    void incTimeMinSinceLastFill(int timeMin) {
+      TimeMinSinceLastFill += timeMin;
+    }
+
+    // Refresh TimeMinSinceLastFill back to zero
+    void refTimeMinSinceLastFill() {
+      TimeMinSinceLastFill = 0;
     }
 };
 
 // Number of trays/switches
-const int numOfSwitches = 4;
+const int numOfSwitches = 12;
 // Array of SVP
 SwitchValvePair SVPArray[numOfSwitches];
 // First switch at startPin
@@ -105,6 +109,10 @@ void setup() {
   }
 }
 
+//ERRORS
+String const ERR1 = "Switch fired for too long";
+String const ERR2 = "Tray did not fill for too long";
+
 // Variable used to keep track of how long a switch has been HIGH
 // Milliseconds
 int amountTimeHighMil = 0;
@@ -112,55 +120,92 @@ int amountTimeHighMil = 0;
 int const amountTimeHighForErrorMil = 2000;
 // Amount of milliseconds to delay between loops
 int const delayTimeMil = 10;
-// Total millisec of delay since last update of TimeMilSinceLastFill
+// These three variables are used to keep track of delay since last update of TimeMinSinceLastFill
 int totalDelayTimeMil = 0;
-// If timeMilSinceLastFill for SVP goes over threshold, flag as an error
-int const thesholdTimeMilSinceLastFill = 1000;
+int totalDelayTimeSec = 0;
+int totalDelayTimeMin = 0;
+// If TimeMinSinceLastFill for SVP goes over threshold, flag as an error
+int const thresholdTimeMinSinceLastFill = 1;
+// Number of times to call checkAndFill() each time loop() is called
+int const numTimesCheckAndFill = 10;
+
 void loop() {
   if(MODE == 0) {
     testLoop();
   }
   else{
-    dlay(delayTimeMil);
-    // Iterate through SVParray
-    // If switch is HIGH make correspoiding valve LOW while switch is HIGH
-    for(int i = 0; i < numOfSwitches; i++) {
-      if(SVPArray[i].isEnabled() && digitalRead(SVPArray[i].getInPin()) == HIGH) {
-        digitalWrite(SVPArray[i].getOutPin(), LOW);
-        // While switch is high fill tray
-        // If amountTimeHighMil becomes too large stop fill
-        while(amountTimeHighMil <= amountTimeHighForErrorMil
-              && digitalRead(SVPArray[i].getInPin()) == HIGH) {
-          amountTimeHighMil += delayTimeMil;
-          dlay(delayTimeMil);
-        }
-        // check if switch was fired for too long, if it was create an error
-        // and disable the switch
-        if(amountTimeHighMil > amountTimeHighForErrorMil) {
-          SVPArray[i].createError("switchFiredForTooLong");
-          SVPArray[i].disable();
-        }
-        // set amountTimeHighMil back to 0
-        amountTimeHighMil = 0;
-        // Write HIGH to valve
-        digitalWrite(SVPArray[i].getOutPin(), HIGH);
+    for(int i = 0; i < numTimesCheckAndFill; i++) {
+      checkAndFillTrays();
+    }
+    updateTimeSinceLastFill();
+  }
+}
+
+// Main loop that checks each SVP to see if each tray needs to be filled.
+void checkAndFillTrays() {
+  dlay(delayTimeMil);
+  // Iterate through SVParray
+  // If switch is HIGH make correspoiding valve LOW while switch is HIGH
+  for(int i = 0; i < numOfSwitches; i++) {
+    // If SCP is enabled and the switch is HIGH, fill tray
+    if(SVPArray[i].isEnabled() && digitalRead(SVPArray[i].getInPin()) == HIGH) {
+      SVPArray[i].refTimeMinSinceLastFill(); // Set timeSinceLastFill back to 0
+      digitalWrite(SVPArray[i].getOutPin(), LOW);
+      // While switch is high fill tray
+      // If amountTimeHighMil becomes too large stop fill
+      while(amountTimeHighMil <= amountTimeHighForErrorMil
+            && digitalRead(SVPArray[i].getInPin()) == HIGH) {
+        amountTimeHighMil += delayTimeMil;
+        dlay(delayTimeMil);
       }
+      // check if switch was fired for too long, if it was create an error
+      // and disable the switch
+      if(amountTimeHighMil > amountTimeHighForErrorMil) {
+        SVPArray[i].createError(ERR1);
+        SVPArray[i].disable();
+      }
+      // set amountTimeHighMil back to 0
+      amountTimeHighMil = 0;
+      // Write HIGH to valve
+      digitalWrite(SVPArray[i].getOutPin(), HIGH);
     }
   }
 }
 
-//void updateTimeMilSinceLastFill() {
-//  for(int i = 0; i < numOfSwitches; i++) {
-//    
-//  }
-//}
+// Update TimeMinSinceLastFill for each SVP
+// Then check each SVP to see if its
+// TimeMinSinceLastFill is over the threshold
+void updateTimeSinceLastFill() {
+  // If totalDelayTimeSec > 60, increment totalDelayTimeMin
+  // by number of minuts and set TDTS to itself mod 60
+  if(totalDelayTimeSec > 60) {
+    totalDelayTimeMin += totalDelayTimeSec / 60;
+    totalDelayTimeSec = totalDelayTimeSec % 60;
+    for(int i = 0; i < numOfSwitches; i++) {
+      SVPArray[i].incTimeMinSinceLastFill(totalDelayTimeMin);
+      if(SVPArray[i].getTimeMinSinceLastFill() > thresholdTimeMinSinceLastFill) {
+        SVPArray[i].createError(ERR2);
+        SVPArray[i].disable();
+      }
+    }
+  }
+  // Set totalDelayTimeMin back to zero
+  totalDelayTimeMin = 0;
+}
 
 // Delay for timeMil
 // Increment numDelays
 void dlay(int timeMil) {
   delay(timeMil);
   totalDelayTimeMil += timeMil;
+  // If totalDelayTimeMil > 1000, increment totalDelayTimeSec
+  // by number of seconds and set TDTM to itself mod 1000
+  if(totalDelayTimeMil > 1000) {
+    totalDelayTimeSec += totalDelayTimeMil / 1000;
+    totalDelayTimeMil = totalDelayTimeMil % 1000;
+  }
 }
+
 
 
 ////////////////////////////////// FOR TESTING ///////////////////////////////////////////
@@ -181,6 +226,15 @@ void testSetup() {
   
 }
 void testLoop() {
+  for(int i = 0; i < numTimesCheckAndFill; i++) {
+    Serial.print("CheckAndFill #");
+    Serial.println(i);
+    testCheckAndFillTrays();
+  }
+  testUpdateTimeMinSinceLastFill();
+}
+
+void testCheckAndFillTrays() {
   dlay(delayTimeMil);
   // Iterate through SVParray
   // If switch is HIGH make correspoiding valve LOW while switch is HIGH
@@ -196,25 +250,62 @@ void testLoop() {
       }
       Serial.println("Done");
       // check if switch was fired for too long, if it was create an error
-      if(amountTimeHighMil > amountTimeHighForErrorMil) {
-        //Serial.println("Throwing error");
-        SVPArray[i].createError("switchFiredForTooLong");
-        SVPArray[i].disable();
-        Serial.println("Creating error");
-      }
+//      if(amountTimeHighMil > amountTimeHighForErrorMil) {
+//        //Serial.println("Throwing error");
+//        SVPArray[i].createError("switchFiredForTooLong");
+//        SVPArray[i].disable();
+//        Serial.println("Creating error");
+//      }
       // set amountTimeHighMil back to 0
       amountTimeHighMil = 0;
       digitalWrite(SVPArray[i].getOutPin(), HIGH);
-      Serial.print("Delay Time: ");
-      Serial.println(totalDelayTimeMil);
+      Serial.print("Delay Time (mil, sec, min): ");
+      Serial.print(totalDelayTimeMil);
+      Serial.print(", ");
+      Serial.print(totalDelayTimeSec);
+      Serial.print(", ");
+      Serial.println(totalDelayTimeMin);
     } else {
       Serial.print("ERROR: ");
       Serial.print(SVPArray[i].getID());
       Serial.print(" ");
       Serial.println(SVPArray[i].getError());
       dlay(1000);
-      Serial.print("Delay Time: ");
-      Serial.println(totalDelayTimeMil);
+      digitalWrite(SVPArray[i].getOutPin(), HIGH);
+      Serial.print("Delay Time (mil, sec, min): ");
+      Serial.print(totalDelayTimeMil);
+      Serial.print(", ");
+      Serial.print(totalDelayTimeSec);
+      Serial.print(", ");
+      Serial.println(totalDelayTimeMin);
     }
   }
+}
+
+void testUpdateTimeMinSinceLastFill() {
+  Serial.println("Entering testUpdateTimeMinSinceLastFill()...");
+  // Update TimeMinSinceLastFill for each SVP
+  // If it is higher than threshold, create error and disable
+   if(totalDelayTimeSec > 60) {
+    Serial.println("totalDelayTimeSec > 60");
+    totalDelayTimeMin += totalDelayTimeSec / 60;
+    totalDelayTimeSec = totalDelayTimeSec % 60;
+    for(int i = 0; i < numOfSwitches; i++) {
+      Serial.print("Checking switch ");
+      Serial.println(i);
+      SVPArray[i].incTimeMinSinceLastFill(totalDelayTimeMin);
+      Serial.print("TimeMinSinceLastFill: ");
+      Serial.println(SVPArray[i].getTimeMinSinceLastFill());
+      if(SVPArray[i].getTimeMinSinceLastFill() > thresholdTimeMinSinceLastFill) {
+        Serial.print(SVPArray[i].getTimeMinSinceLastFill());
+        Serial.println(" : ERR2 created");
+        SVPArray[i].createError(ERR2);
+        SVPArray[i].disable();
+      }
+      delay(500);
+    }
+  }
+  // Set totalDelayTimeMin back to zero
+  totalDelayTimeMin = 0;
+  Serial.println("Exiting...");
 }
